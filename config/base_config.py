@@ -19,7 +19,7 @@
 
 # 基础配置
 PLATFORM = "xhs"  # 平台，xhs | dy | ks | bili | wb | tieba | zhihu
-KEYWORDS = "编程副业,编程兼职"  # 关键词搜索配置，以英文逗号分隔
+KEYWORDS = "上班第一天状态"  # 关键词搜索配置，以英文逗号分隔
 LOGIN_TYPE = "qrcode"  # qrcode or phone or cookie
 COOKIES = ""
 CRAWLER_TYPE = (
@@ -32,7 +32,7 @@ ENABLE_IP_PROXY = False
 IP_PROXY_POOL_COUNT = 2
 
 # 代理IP提供商名称
-IP_PROXY_PROVIDER_NAME = "kuaidaili"  # kuaidaili | wandouhttp
+IP_PROXY_PROVIDER_NAME = ""  # kuaidaili | wandouhttp
 
 # 设置为True不会打开浏览器（无头浏览器）
 # 设置False会打开一个浏览器
@@ -68,7 +68,7 @@ BROWSER_LAUNCH_TIMEOUT = 60
 
 # 是否在程序结束时自动关闭浏览器
 # 设置为False可以保持浏览器运行，便于调试
-AUTO_CLOSE_BROWSER = True
+AUTO_CLOSE_BROWSER = False
 
 # 数据保存类型选项配置,支持六种类型：csv、db、json、sqlite、excel、postgres, 最好保存到DB，有排重的功能。
 SAVE_DATA_OPTION = "json"  # csv or db or json or sqlite or excel or postgres
@@ -80,7 +80,7 @@ USER_DATA_DIR = "%s_user_data_dir"  # %s will be replaced by platform name
 START_PAGE = 1
 
 # 爬取视频/帖子的数量控制
-CRAWLER_MAX_NOTES_COUNT = 15
+CRAWLER_MAX_NOTES_COUNT = 100
 
 # 并发爬虫数量控制
 MAX_CONCURRENCY_NUM = 1
@@ -92,7 +92,7 @@ ENABLE_GET_MEIDAS = False
 ENABLE_GET_COMMENTS = True
 
 # 爬取一级评论的数量控制(单视频/帖子)
-CRAWLER_MAX_COMMENTS_COUNT_SINGLENOTES = 10
+CRAWLER_MAX_COMMENTS_COUNT_SINGLENOTES = 100
 
 # 是否开启爬二级评论模式, 默认不开启爬二级评论
 # 老版本项目使用了 db, 则需参考 schema/tables.sql line 287 增加表字段
@@ -115,7 +115,7 @@ STOP_WORDS_FILE = "./docs/hit_stopwords.txt"
 FONT_PATH = "./docs/STZHONGS.TTF"
 
 # 爬取间隔时间
-CRAWLER_MAX_SLEEP_SEC = 2
+CRAWLER_MAX_SLEEP_SEC = 10
 
 from .bilibili_config import *
 from .xhs_config import *

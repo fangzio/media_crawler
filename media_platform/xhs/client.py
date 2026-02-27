@@ -44,14 +44,14 @@ from .playwright_sign import sign_with_playwright
 class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
 
     def __init__(
-        self,
-        timeout=60,  # If media crawling is enabled, Xiaohongshu long videos need longer timeout
-        proxy=None,
-        *,
-        headers: Dict[str, str],
-        playwright_page: Page,
-        cookie_dict: Dict[str, str],
-        proxy_ip_pool: Optional["ProxyIpPool"] = None,
+            self,
+            timeout=60,  # If media crawling is enabled, Xiaohongshu long videos need longer timeout
+            proxy=None,
+            *,
+            headers: Dict[str, str],
+            playwright_page: Page,
+            cookie_dict: Dict[str, str],
+            proxy_ip_pool: Optional["ProxyIpPool"] = None,
     ):
         self.proxy = proxy
         self.timeout = timeout
@@ -131,8 +131,8 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
 
         if response.status_code == 471 or response.status_code == 461:
             # someday someone maybe will bypass captcha
-            verify_type = response.headers["Verifytype"]
-            verify_uuid = response.headers["Verifyuuid"]
+            verify_type = response.headers.get("Verifytype", "unknown")
+            verify_uuid = response.headers.get("Verifyuuid", "unknown")
             msg = f"CAPTCHA appeared, request failed, Verifytype: {verify_type}, Verifyuuid: {verify_uuid}, Response: {response}"
             utils.logger.error(msg)
             raise Exception(msg)
@@ -201,7 +201,7 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
                 else:
                     return response.content
             except (
-                httpx.HTTPError
+                    httpx.HTTPError
             ) as exc:  # some wrong when call httpx.request method, such as connection error, client error, server error or response status code is not 2xx
                 utils.logger.error(
                     f"[XiaoHongShuClient.get_aweme_media] {exc.__class__.__name__} for {exc.request.url} - {exc}"
@@ -242,13 +242,13 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
         self.cookie_dict = cookie_dict
 
     async def get_note_by_keyword(
-        self,
-        keyword: str,
-        search_id: str = get_search_id(),
-        page: int = 1,
-        page_size: int = 20,
-        sort: SearchSortType = SearchSortType.GENERAL,
-        note_type: SearchNoteType = SearchNoteType.ALL,
+            self,
+            keyword: str,
+            search_id: str = get_search_id(),
+            page: int = 1,
+            page_size: int = 20,
+            sort: SearchSortType = SearchSortType.GENERAL,
+            note_type: SearchNoteType = SearchNoteType.ALL,
     ) -> Dict:
         """
         Search notes by keyword
@@ -274,10 +274,10 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
         return await self.post(uri, data)
 
     async def get_note_by_id(
-        self,
-        note_id: str,
-        xsec_source: str,
-        xsec_token: str,
+            self,
+            note_id: str,
+            xsec_source: str,
+            xsec_token: str,
     ) -> Dict:
         """
         Get note detail API
@@ -311,10 +311,10 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
         return dict()
 
     async def get_note_comments(
-        self,
-        note_id: str,
-        xsec_token: str,
-        cursor: str = "",
+            self,
+            note_id: str,
+            xsec_token: str,
+            cursor: str = "",
     ) -> Dict:
         """
         Get first-level comments API
@@ -337,12 +337,12 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
         return await self.get(uri, params)
 
     async def get_note_sub_comments(
-        self,
-        note_id: str,
-        root_comment_id: str,
-        xsec_token: str,
-        num: int = 10,
-        cursor: str = "",
+            self,
+            note_id: str,
+            root_comment_id: str,
+            xsec_token: str,
+            num: int = 10,
+            cursor: str = "",
     ):
         """
         Get sub-comments under specified parent comment API
@@ -369,12 +369,12 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
         return await self.get(uri, params)
 
     async def get_note_all_comments(
-        self,
-        note_id: str,
-        xsec_token: str,
-        crawl_interval: float = 1.0,
-        callback: Optional[Callable] = None,
-        max_count: int = 10,
+            self,
+            note_id: str,
+            xsec_token: str,
+            crawl_interval: float = 1.0,
+            callback: Optional[Callable] = None,
+            max_count: int = 10,
     ) -> List[Dict]:
         """
         Get all first-level comments under specified note, this method will continuously find all comment information under a post
@@ -418,11 +418,11 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
         return result
 
     async def get_comments_all_sub_comments(
-        self,
-        comments: List[Dict],
-        xsec_token: str,
-        crawl_interval: float = 1.0,
-        callback: Optional[Callable] = None,
+            self,
+            comments: List[Dict],
+            xsec_token: str,
+            crawl_interval: float = 1.0,
+            callback: Optional[Callable] = None,
     ) -> List[Dict]:
         """
         Get all second-level comments under specified first-level comments, this method will continuously find all second-level comment information under first-level comments
@@ -484,7 +484,7 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
         return result
 
     async def get_creator_info(
-        self, user_id: str, xsec_token: str = "", xsec_source: str = ""
+            self, user_id: str, xsec_token: str = "", xsec_source: str = ""
     ) -> Dict:
         """
         Get user profile brief information by parsing user homepage HTML
@@ -509,12 +509,12 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
         return self._extractor.extract_creator_info_from_html(html_content)
 
     async def get_notes_by_creator(
-        self,
-        creator: str,
-        cursor: str,
-        page_size: int = 30,
-        xsec_token: str = "",
-        xsec_source: str = "pc_feed",
+            self,
+            creator: str,
+            cursor: str,
+            page_size: int = 30,
+            xsec_token: str = "",
+            xsec_source: str = "pc_feed",
     ) -> Dict:
         """
         Get creator's notes
@@ -539,12 +539,12 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
         return await self.get(uri, params)
 
     async def get_all_notes_by_creator(
-        self,
-        user_id: str,
-        crawl_interval: float = 1.0,
-        callback: Optional[Callable] = None,
-        xsec_token: str = "",
-        xsec_source: str = "pc_feed",
+            self,
+            user_id: str,
+            crawl_interval: float = 1.0,
+            callback: Optional[Callable] = None,
+            xsec_token: str = "",
+            xsec_source: str = "pc_feed",
     ) -> List[Dict]:
         """
         Get all posts published by specified user, this method will continuously find all post information under a user
@@ -615,11 +615,11 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
 
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(1))
     async def get_note_by_id_from_html(
-        self,
-        note_id: str,
-        xsec_source: str,
-        xsec_token: str,
-        enable_cookie: bool = False,
+            self,
+            note_id: str,
+            xsec_source: str,
+            xsec_token: str,
+            enable_cookie: bool = False,
     ) -> Optional[Dict]:
         """
         Get note details by parsing note detail page HTML, this interface may fail, retry 3 times here
@@ -635,9 +635,9 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
 
         """
         url = (
-            "https://www.xiaohongshu.com/explore/"
-            + note_id
-            + f"?xsec_token={xsec_token}&xsec_source={xsec_source}"
+                "https://www.xiaohongshu.com/explore/"
+                + note_id
+                + f"?xsec_token={xsec_token}&xsec_source={xsec_source}"
         )
         copy_headers = self.headers.copy()
         if not enable_cookie:
