@@ -31,9 +31,11 @@ from playwright.async_api import (
     async_playwright,
 )
 from tenacity import RetryError
+from sqlalchemy import text
 
 import config
 from base.base_crawler import AbstractCrawler
+from database.db_session import get_async_engine
 from model.m_xiaohongshu import NoteUrlInfo, CreatorUrlInfo
 from proxy.proxy_ip_pool import IpInfoModel, create_ip_pool
 from store import xhs as xhs_store
@@ -41,8 +43,9 @@ from tools import utils
 from tools.cdp_browser import CDPBrowserManager
 from var import crawler_type_var, source_keyword_var
 
+from .auth_http import XhsAuthHttpServer
 from .client import XiaoHongShuClient
-from .exception import DataFetchError
+from .exception import CaptchaRequiredError, DataFetchError
 from .field import SearchSortType
 from .help import parse_note_info_from_note_url, parse_creator_info_from_url, get_search_id
 from .login import XiaoHongShuLogin
@@ -53,6 +56,7 @@ class XiaoHongShuCrawler(AbstractCrawler):
     xhs_client: XiaoHongShuClient
     browser_context: BrowserContext
     cdp_manager: Optional[CDPBrowserManager]
+    auth_http_server: Optional[XhsAuthHttpServer]
 
     def __init__(self) -> None:
         self.index_url = "https://www.xiaohongshu.com"
@@ -60,6 +64,9 @@ class XiaoHongShuCrawler(AbstractCrawler):
         self.user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
         self.cdp_manager = None
         self.ip_proxy_pool = None  # Proxy IP pool for automatic proxy refresh
+        self.auth_http_server = None
+        self.captcha_required = False
+        self.force_login_required = False
 
     async def start(self) -> None:
         playwright_proxy_format, httpx_proxy_format = None, None
@@ -96,7 +103,19 @@ class XiaoHongShuCrawler(AbstractCrawler):
 
             # Create a client to interact with the Xiaohongshu website.
             self.xhs_client = await self.create_xhs_client(httpx_proxy_format)
-            if not await self.xhs_client.pong():
+            if config.ENABLE_AUTH_HTTP_SERVER:
+                self.auth_http_server = XhsAuthHttpServer(self)
+                await self.auth_http_server.start(config.AUTH_HTTP_HOST, config.AUTH_HTTP_PORT)
+            try:
+                pong_ok = await self.xhs_client.pong()
+            except CaptchaRequiredError as e:
+                utils.logger.warning(
+                    f"[XiaoHongShuCrawler.start] Login required at startup: {e}"
+                )
+                self.captcha_required = True
+                pong_ok = False
+
+            if not pong_ok:
                 login_obj = XiaoHongShuLogin(
                     login_type=config.LOGIN_TYPE,
                     login_phone="",  # input your phone number
@@ -108,78 +127,244 @@ class XiaoHongShuCrawler(AbstractCrawler):
                 await self.xhs_client.update_cookies(browser_context=self.browser_context)
 
             crawler_type_var.set(config.CRAWLER_TYPE)
-            if config.CRAWLER_TYPE == "search":
-                # Search for notes and retrieve their comment information.
-                await self.search()
-            elif config.CRAWLER_TYPE == "detail":
-                # Get the information and comments of the specified post
-                await self.get_specified_notes()
-            elif config.CRAWLER_TYPE == "creator":
-                # Get creator's information and their notes and comments
-                await self.get_creators_and_notes()
-            else:
-                pass
+            while True:
+                try:
+                    if config.CRAWLER_TYPE == "search":
+                        # Search for notes and retrieve their comment information.
+                        if config.KEYWORD_SOURCE == "mysql":
+                            await self.search_from_mysql()
+                        else:
+                            await self.search()
+                    elif config.CRAWLER_TYPE == "detail":
+                        # Get the information and comments of the specified post
+                        await self.get_specified_notes()
+                    elif config.CRAWLER_TYPE == "creator":
+                        # Get creator's information and their notes and comments
+                        await self.get_creators_and_notes()
+                    else:
+                        pass
+                    break
+                except CaptchaRequiredError as e:
+                    utils.logger.warning(
+                        f"[XiaoHongShuCrawler.start] CAPTCHA detected, waiting for manual login: {e}"
+                    )
+                    self.captcha_required = True
+                    await self._relogin_for_captcha()
 
             utils.logger.info("[XiaoHongShuCrawler.start] Xhs Crawler finished ...")
 
-    async def search(self) -> None:
+    async def _relogin_for_captcha(self) -> None:
+        login_type = "qrcode"
+        if config.LOGIN_TYPE != "qrcode":
+            utils.logger.warning(
+                f"[XiaoHongShuCrawler._relogin_for_captcha] Force login type to qrcode (current: {config.LOGIN_TYPE})"
+            )
+        await self._ensure_login_dialog(force_click=True)
+        login_obj = XiaoHongShuLogin(
+            login_type=login_type,
+            login_phone="",  # input your phone number
+            browser_context=self.browser_context,
+            context_page=self.context_page,
+            cookie_str=config.COOKIES,
+        )
+        await login_obj.begin()
+        await self.xhs_client.update_cookies(browser_context=self.browser_context)
+        self.captcha_required = False
+        self.force_login_required = False
+
+    async def get_login_status(self) -> Dict:
+        logged_in = False
+        captcha_required = self.captcha_required
+        if self.force_login_required:
+            return {
+                "logged_in": False,
+                "needs_login": True,
+                "captcha_required": captcha_required,
+            }
+        try:
+            user_profile_selector = "xpath=//a[contains(@href, '/user/profile/')]//span[text()='我']"
+            logged_in = await self.context_page.is_visible(user_profile_selector, timeout=500)
+        except Exception:
+            logged_in = False
+
+        if not logged_in:
+            try:
+                logged_in = await self.xhs_client.pong()
+            except CaptchaRequiredError:
+                captcha_required = True
+                logged_in = False
+
+        return {
+            "logged_in": logged_in,
+            "needs_login": not logged_in,
+            "captcha_required": captcha_required,
+        }
+
+    async def expire_login(self, force_captcha: bool = True) -> None:
+        try:
+            await self.browser_context.clear_cookies()
+        except Exception as e:
+            utils.logger.warning(f"[XiaoHongShuCrawler.expire_login] clear cookies failed: {e}")
+        try:
+            self.xhs_client.headers["Cookie"] = ""
+            self.xhs_client.cookie_dict = {}
+        except Exception:
+            pass
+        self.force_login_required = True
+        if force_captcha:
+            self.captcha_required = True
+
+    async def get_login_qrcode(self) -> str:
+        qrcode_img_selector = "xpath=//img[@class='qrcode-img']"
+        await self._ensure_login_dialog()
+        base64_qrcode_img = await utils.find_login_qrcode(
+            self.context_page,
+            selector=qrcode_img_selector
+        )
+        if not base64_qrcode_img:
+            await self._ensure_login_dialog(force_click=True)
+            base64_qrcode_img = await utils.find_login_qrcode(
+                self.context_page,
+                selector=qrcode_img_selector
+            )
+        return base64_qrcode_img
+
+    async def _ensure_login_dialog(self, force_click: bool = False) -> None:
+        try:
+            await self.context_page.goto(self.index_url, wait_until="domcontentloaded")
+        except Exception:
+            pass
+        try:
+            login_button_ele = await self.context_page.wait_for_selector(
+                "xpath=//*[@id='app']/div[1]/div[2]/div[1]/ul/div[1]/button",
+                timeout=2000,
+            )
+            if force_click:
+                await login_button_ele.click()
+        except Exception:
+            pass
+
+    async def search(self, keywords: Optional[List[str]] = None) -> None:
         """Search for notes and retrieve their comment information."""
+        if keywords is None:
+            keywords = [keyword for keyword in config.KEYWORDS.split(",") if keyword.strip()]
         utils.logger.info("[XiaoHongShuCrawler.search] Begin search Xiaohongshu keywords")
+        for keyword in keywords:
+            await self._search_keyword(keyword)
+
+    async def _search_keyword(self, keyword: str) -> None:
         xhs_limit_count = 20  # Xiaohongshu limit page fixed value
         if config.CRAWLER_MAX_NOTES_COUNT < xhs_limit_count:
             config.CRAWLER_MAX_NOTES_COUNT = xhs_limit_count
         start_page = config.START_PAGE
-        for keyword in config.KEYWORDS.split(","):
-            source_keyword_var.set(keyword)
-            utils.logger.info(f"[XiaoHongShuCrawler.search] Current search keyword: {keyword}")
-            page = 1
-            search_id = get_search_id()
-            while (page - start_page + 1) * xhs_limit_count <= config.CRAWLER_MAX_NOTES_COUNT:
-                if page < start_page:
-                    utils.logger.info(f"[XiaoHongShuCrawler.search] Skip page {page}")
-                    page += 1
-                    continue
+        source_keyword_var.set(keyword)
+        utils.logger.info(f"[XiaoHongShuCrawler.search] Current search keyword: {keyword}")
+        page = 1
+        search_id = get_search_id()
+        while (page - start_page + 1) * xhs_limit_count <= config.CRAWLER_MAX_NOTES_COUNT:
+            if page < start_page:
+                utils.logger.info(f"[XiaoHongShuCrawler.search] Skip page {page}")
+                page += 1
+                continue
 
-                try:
-                    utils.logger.info(f"[XiaoHongShuCrawler.search] search Xiaohongshu keyword: {keyword}, page: {page}")
-                    note_ids: List[str] = []
-                    xsec_tokens: List[str] = []
-                    notes_res = await self.xhs_client.get_note_by_keyword(
-                        keyword=keyword,
-                        search_id=search_id,
-                        page=page,
-                        sort=(SearchSortType(config.SORT_TYPE) if config.SORT_TYPE != "" else SearchSortType.GENERAL),
-                    )
-                    utils.logger.info(f"[XiaoHongShuCrawler.search] Search notes response: {notes_res}")
-                    if not notes_res or not notes_res.get("has_more", False):
-                        utils.logger.info("[XiaoHongShuCrawler.search] No more content!")
-                        break
-                    semaphore = asyncio.Semaphore(config.MAX_CONCURRENCY_NUM)
-                    task_list = [
-                        self.get_note_detail_async_task(
-                            note_id=post_item.get("id"),
-                            xsec_source=post_item.get("xsec_source"),
-                            xsec_token=post_item.get("xsec_token"),
-                            semaphore=semaphore,
-                        ) for post_item in notes_res.get("items", {}) if post_item.get("model_type") not in ("rec_query", "hot_query")
-                    ]
-                    note_details = await asyncio.gather(*task_list)
-                    for note_detail in note_details:
-                        if note_detail:
-                            await xhs_store.update_xhs_note(note_detail)
-                            await self.get_notice_media(note_detail)
-                            note_ids.append(note_detail.get("note_id"))
-                            xsec_tokens.append(note_detail.get("xsec_token"))
-                    page += 1
-                    utils.logger.info(f"[XiaoHongShuCrawler.search] Note details: {note_details}")
-                    await self.batch_get_note_comments(note_ids, xsec_tokens)
-
-                    # Sleep after each page navigation
-                    await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
-                    utils.logger.info(f"[XiaoHongShuCrawler.search] Sleeping for {config.CRAWLER_MAX_SLEEP_SEC} seconds after page {page-1}")
-                except DataFetchError:
-                    utils.logger.error("[XiaoHongShuCrawler.search] Get note detail error")
+            try:
+                utils.logger.info(f"[XiaoHongShuCrawler.search] search Xiaohongshu keyword: {keyword}, page: {page}")
+                note_ids: List[str] = []
+                xsec_tokens: List[str] = []
+                notes_res = await self.xhs_client.get_note_by_keyword(
+                    keyword=keyword,
+                    search_id=search_id,
+                    page=page,
+                    sort=(SearchSortType(config.SORT_TYPE) if config.SORT_TYPE != "" else SearchSortType.GENERAL),
+                )
+                utils.logger.info(f"[XiaoHongShuCrawler.search] Search notes response: {notes_res}")
+                if not notes_res or not notes_res.get("has_more", False):
+                    utils.logger.info("[XiaoHongShuCrawler.search] No more content!")
                     break
+                semaphore = asyncio.Semaphore(config.MAX_CONCURRENCY_NUM)
+                task_list = [
+                    self.get_note_detail_async_task(
+                        note_id=post_item.get("id"),
+                        xsec_source=post_item.get("xsec_source"),
+                        xsec_token=post_item.get("xsec_token"),
+                        semaphore=semaphore,
+                    ) for post_item in notes_res.get("items", {}) if post_item.get("model_type") not in ("rec_query", "hot_query")
+                ]
+                note_details = await asyncio.gather(*task_list)
+                for note_detail in note_details:
+                    if note_detail:
+                        await xhs_store.update_xhs_note(note_detail)
+                        await self.get_notice_media(note_detail)
+                        note_ids.append(note_detail.get("note_id"))
+                        xsec_tokens.append(note_detail.get("xsec_token"))
+                page += 1
+                utils.logger.info(f"[XiaoHongShuCrawler.search] Note details: {note_details}")
+                await self.batch_get_note_comments(note_ids, xsec_tokens)
+
+                # Sleep after each page navigation
+                await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
+                utils.logger.info(f"[XiaoHongShuCrawler.search] Sleeping for {config.CRAWLER_MAX_SLEEP_SEC} seconds after page {page-1}")
+            except DataFetchError:
+                utils.logger.error("[XiaoHongShuCrawler.search] Get note detail error")
+                break
+
+    async def search_from_mysql(self) -> None:
+        utils.logger.info("[XiaoHongShuCrawler.search_from_mysql] Begin search from MySQL keyword source")
+        while True:
+            keywords = await self._fetch_keywords_from_mysql()
+            if not keywords:
+                await asyncio.sleep(config.KEYWORD_POLL_INTERVAL_SEC)
+                continue
+            for keyword in keywords:
+                await self._search_keyword(keyword)
+                await self._mark_keyword_done(keyword)
+
+    async def _fetch_keywords_from_mysql(self) -> List[str]:
+        sql = config.MYSQL_KEYWORD_SELECT_SQL.strip()
+        if not sql:
+            utils.logger.warning("[XiaoHongShuCrawler._fetch_keywords_from_mysql] Empty SQL")
+            return []
+
+        engine = get_async_engine("mysql")
+        if not engine:
+            utils.logger.error("[XiaoHongShuCrawler._fetch_keywords_from_mysql] MySQL engine not available")
+            return []
+
+        params = {}
+        if ":limit" in sql:
+            params["limit"] = config.MYSQL_KEYWORD_BATCH_SIZE
+
+        try:
+            async with engine.connect() as conn:
+                result = await conn.execute(text(sql), params)
+                rows = result.fetchall()
+        except Exception as e:
+            utils.logger.error(f"[XiaoHongShuCrawler._fetch_keywords_from_mysql] Query failed: {e}")
+            return []
+
+        keywords: List[str] = []
+        for row in rows:
+            if not row:
+                continue
+            keyword = row[0]
+            if keyword:
+                keywords.append(str(keyword).strip())
+        return [kw for kw in keywords if kw]
+
+    async def _mark_keyword_done(self, keyword: str) -> None:
+        sql = config.MYSQL_KEYWORD_MARK_DONE_SQL.strip()
+        if not sql:
+            return
+
+        engine = get_async_engine("mysql")
+        if not engine:
+            return
+
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text(sql), {"keyword": keyword})
+        except Exception as e:
+            utils.logger.error(f"[XiaoHongShuCrawler._mark_keyword_done] Update failed: {e}, keyword: {keyword}")
 
     async def get_creators_and_notes(self) -> None:
         """Get creator's notes and retrieve their comment information."""
@@ -441,6 +626,9 @@ class XiaoHongShuCrawler(AbstractCrawler):
 
     async def close(self):
         """Close browser context"""
+        if self.auth_http_server:
+            await self.auth_http_server.stop()
+            self.auth_http_server = None
         # Special handling if using CDP mode
         if self.cdp_manager:
             await self.cdp_manager.cleanup()

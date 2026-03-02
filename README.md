@@ -150,6 +150,57 @@ uv run main.py --platform xhs --lt qrcode --type detail
 uv run main.py --help
 ```
 
+## 🔐 登录态 HTTP 接口（爬虫进程内）
+
+该接口只在“直接运行爬虫”的模式下生效，建议绑定本机地址使用。
+
+### 启用方式
+
+在 `config/base_config.py` 设置：
+
+```python
+ENABLE_AUTH_HTTP_SERVER = True
+AUTH_HTTP_HOST = "127.0.0.1"
+AUTH_HTTP_PORT = 18080
+```
+
+### 接口列表
+
+- `GET /auth/status`：查询登录状态与是否需要登录
+- `GET /auth/qrcode`：获取登录二维码（base64）
+- `POST /auth/expire`：清空登录态（模拟 cookie 失效）
+- `GET /health`：健康检查
+
+### 返回示例
+
+`GET /auth/status`
+
+```json
+{
+  "logged_in": true,
+  "needs_login": false,
+  "captcha_required": false
+}
+```
+
+`GET /auth/qrcode`
+
+```json
+{
+  "success": true,
+  "qrcode": "base64..."
+}
+```
+
+`POST /auth/expire?force_captcha=true`
+
+```json
+{
+  "success": true,
+  "message": "cookies cleared"
+}
+```
+
 ## WebUI支持
 
 <details>

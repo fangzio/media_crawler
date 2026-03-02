@@ -19,12 +19,13 @@
 
 import asyncio
 import json
+import time
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 from urllib.parse import urlencode
 
 import httpx
 from playwright.async_api import BrowserContext, Page
-from tenacity import retry, stop_after_attempt, wait_fixed
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_fixed
 
 import config
 from base.base_crawler import AbstractApiClient
@@ -34,7 +35,7 @@ from tools import utils
 if TYPE_CHECKING:
     from proxy.proxy_ip_pool import ProxyIpPool
 
-from .exception import DataFetchError, IPBlockError
+from .exception import CaptchaRequiredError, DataFetchError, IPBlockError
 from .field import SearchNoteType, SearchSortType
 from .help import get_search_id
 from .extractor import XiaoHongShuExtractor
@@ -109,7 +110,11 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
         self.headers.update(headers)
         return self.headers
 
-    @retry(stop=stop_after_attempt(3), wait=wait_fixed(1))
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_fixed(1),
+        retry=retry_if_exception(lambda e: not isinstance(e, CaptchaRequiredError)),
+    )
     async def request(self, method, url, **kwargs) -> Union[str, Any]:
         """
         Wrapper for httpx common request method, processes request response
@@ -135,7 +140,7 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
             verify_uuid = response.headers.get("Verifyuuid", "unknown")
             msg = f"CAPTCHA appeared, request failed, Verifytype: {verify_type}, Verifyuuid: {verify_uuid}, Response: {response}"
             utils.logger.error(msg)
-            raise Exception(msg)
+            raise CaptchaRequiredError(msg)
 
         if return_response:
             return response.text
@@ -146,6 +151,8 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
             raise IPBlockError(self.IP_ERROR_STR)
         else:
             err_msg = data.get("msg", None) or f"{response.text}"
+            if isinstance(err_msg, str) and ("无登录信息" in err_msg or "登录信息为空" in err_msg):
+                raise CaptchaRequiredError(err_msg)
             raise DataFetchError(err_msg)
 
     async def get(self, uri: str, params: Optional[Dict] = None) -> Dict:
@@ -221,6 +228,8 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
             note_card: Dict = await self.get_note_by_keyword(keyword="Xiaohongshu")
             if note_card.get("items"):
                 ping_flag = True
+        except CaptchaRequiredError:
+            raise
         except Exception as e:
             utils.logger.error(
                 f"[XiaoHongShuClient.pong] Ping xhs failed: {e}, and try to login again..."
@@ -391,8 +400,14 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
         comments_has_more = True
         comments_cursor = ""
         while comments_has_more and len(result) < max_count:
+            cursor_before = comments_cursor
+            request_start = time.monotonic()
             comments_res = await self.get_note_comments(
                 note_id=note_id, xsec_token=xsec_token, cursor=comments_cursor
+            )
+            elapsed = time.monotonic() - request_start
+            utils.logger.info(
+                f"[XiaoHongShuClient.get_note_all_comments] comment page fetched in {elapsed:.2f}s, note_id: {note_id}, cursor: {cursor_before or 'start'}"
             )
             comments_has_more = comments_res.get("has_more", False)
             comments_cursor = comments_res.get("cursor", "")

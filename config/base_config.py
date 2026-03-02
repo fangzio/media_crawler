@@ -19,7 +19,7 @@
 
 # 基础配置
 PLATFORM = "xhs"  # 平台，xhs | dy | ks | bili | wb | tieba | zhihu
-KEYWORDS = "上班第一天状态"  # 关键词搜索配置，以英文逗号分隔
+KEYWORDS = "中秋国庆假期"  # 关键词搜索配置，以英文逗号分隔
 LOGIN_TYPE = "qrcode"  # qrcode or phone or cookie
 COOKIES = ""
 CRAWLER_TYPE = (
@@ -38,10 +38,16 @@ IP_PROXY_PROVIDER_NAME = ""  # kuaidaili | wandouhttp
 # 设置False会打开一个浏览器
 # 小红书如果一直扫码登录不通过，打开浏览器手动过一下滑动验证码
 # 抖音如果一直提示失败，打开浏览器看下是否扫码登录之后出现了手机号验证，如果出现了手动过一下再试。
-HEADLESS = False
+HEADLESS = True
 
 # 是否保存登录状态
 SAVE_LOGIN_STATE = True
+
+# ==================== Auth HTTP Server (optional) ====================
+# 在爬虫进程内启动一个只读HTTP服务，用于查询登录态/获取二维码
+ENABLE_AUTH_HTTP_SERVER = True
+AUTH_HTTP_HOST = "0.0.0.0"
+AUTH_HTTP_PORT = 18080
 
 # ==================== CDP (Chrome DevTools Protocol) 配置 ====================
 # 是否启用CDP模式 - 使用用户现有的Chrome/Edge浏览器进行爬取，提供更好的反检测能力
@@ -71,7 +77,7 @@ BROWSER_LAUNCH_TIMEOUT = 60
 AUTO_CLOSE_BROWSER = False
 
 # 数据保存类型选项配置,支持六种类型：csv、db、json、sqlite、excel、postgres, 最好保存到DB，有排重的功能。
-SAVE_DATA_OPTION = "json"  # csv or db or json or sqlite or excel or postgres
+SAVE_DATA_OPTION = "db"  # csv or db or json or sqlite or excel or postgres
 
 # 用户浏览器缓存的浏览器文件配置
 USER_DATA_DIR = "%s_user_data_dir"  # %s will be replaced by platform name
@@ -80,7 +86,7 @@ USER_DATA_DIR = "%s_user_data_dir"  # %s will be replaced by platform name
 START_PAGE = 1
 
 # 爬取视频/帖子的数量控制
-CRAWLER_MAX_NOTES_COUNT = 100
+CRAWLER_MAX_NOTES_COUNT = 20
 
 # 并发爬虫数量控制
 MAX_CONCURRENCY_NUM = 1
@@ -92,7 +98,7 @@ ENABLE_GET_MEIDAS = False
 ENABLE_GET_COMMENTS = True
 
 # 爬取一级评论的数量控制(单视频/帖子)
-CRAWLER_MAX_COMMENTS_COUNT_SINGLENOTES = 100
+CRAWLER_MAX_COMMENTS_COUNT_SINGLENOTES = 10
 
 # 是否开启爬二级评论模式, 默认不开启爬二级评论
 # 老版本项目使用了 db, 则需参考 schema/tables.sql line 287 增加表字段
@@ -116,6 +122,16 @@ FONT_PATH = "./docs/STZHONGS.TTF"
 
 # 爬取间隔时间
 CRAWLER_MAX_SLEEP_SEC = 10
+
+# ==================== Keyword Source (search mode) ====================
+# 关键词来源：config 或 mysql
+KEYWORD_SOURCE = "mysql"
+# 当没有新关键词时的轮询等待时间（秒）
+KEYWORD_POLL_INTERVAL_SEC = 30
+# MySQL 关键词读取配置
+MYSQL_KEYWORD_BATCH_SIZE = 10
+MYSQL_KEYWORD_SELECT_SQL = "SELECT keyword FROM xhs_keywords WHERE status=0 ORDER BY id ASC LIMIT :limit"
+MYSQL_KEYWORD_MARK_DONE_SQL = "UPDATE xhs_keywords SET status=1, updated_at=NOW() WHERE keyword=:keyword"
 
 from .bilibili_config import *
 from .xhs_config import *

@@ -27,3 +27,7 @@ class DataFetchError(RequestError):
 
 class IPBlockError(RequestError):
     """fetch so fast that the server block us ip"""
+
+
+class CaptchaRequiredError(RequestError):
+    """captcha required, manual verification needed"""
